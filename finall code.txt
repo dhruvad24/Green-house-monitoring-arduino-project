@@ -1,0 +1,179 @@
+// connect node mcu's D1 pin(SDA) TO SDA PIN IN I2C OF LCD16X2_I2C MODULE
+// CONNECT NODE MCU'S D2 PIN(SCL) TO  SCL  PIN IN I2C OF LCD16X2_I2C MODULE
+// CONNECT MQ135 sensor analog pin to NODE MCU'S A0 PIN
+// CONNECT LDR sensor digital pin to node mcu's D8 pin
+// connect Soil moisture sensor DIGITAL pin(D0) to D4
+// connect DHT11 sensor digital pin to D7
+// connect Relay (water pump)control pin to node mcu's D3
+// connect fan to node mcu's D5
+// CONNECT DS18B20 sensor data pin TO D6
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <DHT.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+#include <ESP8266HTTPClient.h>
+
+const int MQ135_PIN = A0;         
+const int LDR_PIN = 8;           
+const int SOIL_MOISTURE_PIN = 4; 
+const int DHT11_PIN = 7;          
+const int RELAY_PIN = 3;               
+const int FAN_PIN = 5;            
+
+
+const int DHT_TYPE = DHT11;
+
+
+const char* ssid = "<YOUR_WIFI_SSID>";              // Replace with your Wi-Fi SSID
+const char* password = "<YOUR_WIFI_PASSWORD>";      // Replace with your Wi-Fi password
+const char* server = "api.thingspeak.com";           
+const String apiKey = "<YOUR_THINGSPEAK_API_KEY>";   // Replace with your ThingSpeak API key
+const String updateURL = "/update?api_key=" + apiKey; 
+
+
+DHT dht(DHT11_PIN, DHT_TYPE);
+OneWire oneWire(6);                   
+DallasTemperature ds18b20(&oneWire);  
+LiquidCrystal_I2C lcd(0x27, 16, 2);   
+
+void setup() {
+  Serial.begin(9600);
+  dht.begin();
+  ds18b20.begin();
+  
+  pinMode(RELAY_PIN, OUTPUT);
+  pinMode(FAN_PIN, OUTPUT);
+  
+  lcd.begin(16, 2);
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Greenhouse Monitor");
+
+  
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("Wi-Fi connected");
+}
+
+void loop() {
+  
+  float temperature = readTemperature();
+  float humidity = readHumidity();
+  float airQuality = readAirQuality();
+  int lightIntensity = readLightIntensity();
+  int soilMoisture = readSoilMoisture();
+
+  
+  lcd.setCursor(0, 1);
+  lcd.print("Temp: ");
+  lcd.print(temperature);
+  lcd.print("C  Humidity: ");
+  lcd.print(humidity);
+  lcd.print("%");
+
+  
+  if (temperature >= 30.0) {
+    turnOnFan();  // Turn on fan
+  } else {
+    turnOffFan(); // Turn off fan
+  }
+  
+  if (soilMoisture < 50) {
+    turnOnRelay();  // Turn on water pump to irrigate plants
+  } else {
+    turnOffRelay(); // Turn off water pump
+  }
+  
+  if (lightIntensity < 100) {
+    turnOnFan();  // Turn on fan for ventilation
+  } else {
+    turnOffFan(); // Turn off fan
+  }
+
+  // Send data to ThingSpeak
+  sendDataToThingSpeak(temperature, humidity, airQuality, lightIntensity, soilMoisture);
+  
+  delay(2000);  // Delay between sensor readings
+}
+
+float readTemperature() {
+  ds18b20.requestTemperatures();
+  float temperature = ds18b20.getTempCByIndex(0);
+  return temperature;
+}
+
+float readHumidity() {
+  float humidity = dht.readHumidity();
+  return humidity;
+}
+
+float readAirQuality() {
+  int sensorValue = analogRead(MQ135_PIN);
+  float voltage = sensorValue * (5.0 / 1023.0);
+  float airQuality = map(voltage, 0.1, 4.0, 0, 100);
+  return airQuality;
+}
+
+int readLightIntensity() {
+  int lightIntensity = analogRead(LDR_PIN);
+  return lightIntensity;
+}
+
+int readSoilMoisture() {
+  int soilMoisture = analogRead(SOIL_MOISTURE_PIN);
+  return soilMoisture;
+}
+
+void turnOnRelay() {
+  digitalWrite(RELAY_PIN, HIGH);
+}
+
+void turnOffRelay() {
+  digitalWrite(RELAY_PIN, LOW);
+}
+
+
+void turnOnFan() {
+  digitalWrite(FAN_PIN, HIGH);
+}
+
+void turnOffFan() {
+  digitalWrite(FAN_PIN, LOW);
+}
+
+void sendDataToThingSpeak(float temperature, float humidity, float airQuality, int lightIntensity, int soilMoisture) {
+  
+  WiFiClient client;
+  HTTPClient http;
+
+  
+  String data = updateURL +
+                "&field1=" + String(temperature) +
+                "&field2=" + String(humidity) +
+                "&field3=" + String(airQuality) +
+                "&field4=" + String(lightIntensity) +
+                "&field5=" + String(soilMoisture);
+
+  
+  http.begin(client, server, 80, data);
+  int httpCode = http.GET();
+
+  
+  if (httpCode > 0) {
+    if (httpCode == HTTP_CODE_OK) {
+      Serial.println("Data sent to ThingSpeak successfully");
+    }
+  } else {
+    Serial.println("Error sending data to ThingSpeak");
+  }
+
+  
+  http.end();
+}
